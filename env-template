@@ -1,3 +1,4 @@
+# Connections
 postgres_integration="postgresql://user:password@host:port/database"
 postgres_production="postgresql://user:password@host:port/database"
 mongo_integration="mongodb+srv://user:password@host/?retryWrites=true&w=majority&appName=mongosh%22"
@@ -6,5 +7,8 @@ clickhouse_integration_main="-h int.host.main -u user -B password -p http-port -
 clickhouse_integration_api="-h int.host.api -u user -B password -p http-port -k"
 clickhouse_production_main="-h prod.host.main -u user -B password -p http-port -k"
 clickhouse_production_api="-h prod.host.api -u user -B password -p http-port -k"
-mysql_ext_integration="mysql://user:password@host:port/database"
-mysql_ext_production="mysql://user:password@host:port/database"
+mysql_integration="mysql://user:password@host:port/database"
+mysql_production="mysql://user:password@host:port/database"
+
+# Clients type
+CLICKHOUSE_CLI_TYPE=<clickhouse-cli / clickhouse-client>

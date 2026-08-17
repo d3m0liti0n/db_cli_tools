@@ -2,7 +2,7 @@
 # db_cli_tools interactive DB connector
 set -e
 
-VERSION="1.0.0"
+VERSION="1.0.1"
 
 if [ -n "$TMUX" ]; then
     original_window_name=$(tmux display-message -p '#{window_name}')
@@ -55,6 +55,50 @@ eof_check() {
         exit 0
     fi
     printf -v "$__resultvar" '%s' "$input"
+}
+
+reparse_for_clickhouse_client() {
+  local src="$*"
+  local host_raw="" user="" password="" secure=1 domain=""
+  CH_ARGS=()
+  set -- $src
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--host)
+        if [ $# -ge 2 ]; then host_raw="$2"; shift 2; else shift; fi;;
+      -h*) host_raw="${1#-h}"; shift;;
+      --host=*) host_raw="${1#--host=}"; shift;;
+      -u|--user)
+        if [ $# -ge 2 ]; then user="$2"; shift 2; else shift; fi;;
+      -u*) user="${1#-u}"; shift;;
+      --user=*) user="${1#--user=}"; shift;;
+      -B|--password)
+        if [ $# -ge 2 ]; then password="$2"; shift 2; else shift; fi;;
+      -B*) password="${1#-B}"; shift;;
+      --password=*) password="${1#--password=}"; shift;;
+      -k|-s|--secure) secure=1; shift;;
+      -p|--port)
+        if [ $# -ge 2 ]; then shift 2; else shift; fi;;
+      -p*) shift;;
+      --port=*) shift;;
+      --) shift; break;;
+      *) shift;;
+    esac
+  done
+  if [ -n "$host_raw" ]; then
+    local t="$host_raw"
+    case "$t" in
+      https://*) t="${t#https://}" ;;
+      http://*) t="${t#http://}" ;;
+    esac
+    t="${t%%/*}"
+    domain="${t%%:*}"
+    if [ -z "$domain" ]; then domain="$t"; fi
+  fi
+  [ -n "${domain:-}" ] && CH_ARGS+=(--host "$domain")
+  [ -n "${user:-}" ] && CH_ARGS+=(-u "$user")
+  [ -n "${password:-}" ] && CH_ARGS+=(--password "$password")
+  [ "$secure" -eq 1 ] && CH_ARGS+=(-s)
 }
 
 select_db() {
@@ -151,7 +195,14 @@ while true; do
             if [ -n "$TMUX" ]; then
                 tmux rename-window "${choosen_db}-${choosen_env}-${choosen_cluster}"
             fi
-            clickhouse-cli ${!connection_full_var}
+
+
+            if [[ -z "${CLICKHOUSE_CLI_TYPE:-}" || "${CLICKHOUSE_CLI_TYPE}" == "clickhouse-cli" ]]; then
+                "$CLICKHOUSE_CLI_TYPE" ${!connection_full_var}
+            else
+                reparse_for_clickhouse_client "${!connection_full_var}"
+                "$CLICKHOUSE_CLI_TYPE" "${CH_ARGS[@]}"
+            fi
             ;;
         postgres)
             echo -e "${GR}Connecting to Postgres ${choosen_env}...${NC}"
