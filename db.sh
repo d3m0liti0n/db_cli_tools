@@ -2,7 +2,7 @@
 # db_cli_tools interactive DB connector
 set -e
 
-VERSION="1.0.1"
+VERSION="1.1.0"
 
 if [ -n "$TMUX" ]; then
     original_window_name=$(tmux display-message -p '#{window_name}')
@@ -47,6 +47,48 @@ fi
 
 # sourcing for creds
 source $HOME/db_cli_tools/.env
+RDS_CA_BUNDLE="${RDS_CA_BUNDLE:-$HOME/.aws/rds-eu-west-1-combined.pem}"
+
+# AWS RDS IAM authentication helpers
+# spec format: "host=<endpoint> port=<port> db=<database> profile=<aws sso profile> [region=<region>]"
+parse_iam_spec() {
+    IAM_HOST="" IAM_PORT="" IAM_DB="" IAM_PROFILE="" IAM_REGION="eu-west-1"
+    local kv
+    for kv in $1; do
+        case "$kv" in
+            host=*) IAM_HOST="${kv#host=}" ;;
+            port=*) IAM_PORT="${kv#port=}" ;;
+            db=*) IAM_DB="${kv#db=}" ;;
+            profile=*) IAM_PROFILE="${kv#profile=}" ;;
+            region=*) IAM_REGION="${kv#region=}" ;;
+        esac
+    done
+}
+
+# prints a fresh 15-min IAM auth token to stdout; returns non-zero on failure
+rds_iam_token() {
+    if [ -z "${AWS_IAM_USER:-}" ]; then
+        echo -e "${RD}AWS_IAM_USER is not set in .env (your full email).${NC}" >&2
+        return 1
+    fi
+    if [ -z "$IAM_HOST" ] || [ -z "$IAM_PORT" ] || [ -z "$IAM_PROFILE" ]; then
+        echo -e "${RD}IAM spec must contain host=, port= and profile=.${NC}" >&2
+        return 1
+    fi
+    if [ ! -f "$RDS_CA_BUNDLE" ]; then
+        echo -e "${RD}CA bundle not found: $RDS_CA_BUNDLE${NC}" >&2
+        echo "Build it with:" >&2
+        echo "  curl -s https://truststore.pki.rds.amazonaws.com/eu-west-1/eu-west-1-bundle.pem https://www.amazontrust.com/repository/AmazonRootCA1.pem > $RDS_CA_BUNDLE" >&2
+        return 1
+    fi
+    if ! aws sts get-caller-identity --profile "$IAM_PROFILE" > /dev/null 2>&1; then
+        echo -e "${GR}AWS SSO session for profile '$IAM_PROFILE' expired, logging in...${NC}" >&2
+        aws sso login --profile "$IAM_PROFILE" >&2 || return 1
+    fi
+    aws rds generate-db-auth-token \
+        --hostname "$IAM_HOST" --port "$IAM_PORT" --region "$IAM_REGION" \
+        --username "$AWS_IAM_USER" --profile "$IAM_PROFILE"
+}
 
 eof_check() {
     local __resultvar=$1
@@ -210,7 +252,20 @@ while true; do
             if [ -n "$TMUX" ]; then
                 tmux rename-window "${choosen_db}-${choosen_env}"
             fi
-            pgcli "${!connection_var}"
+            iam_var="${connection_var}_iam"
+            if [ -n "${!iam_var:-}" ]; then
+                parse_iam_spec "${!iam_var}"
+                echo -e "${GR}Using IAM auth as ${AWS_IAM_USER} -> ${IAM_HOST}${NC}"
+                if ! token=$(rds_iam_token); then
+                    echo -e "${RD}Failed to get IAM token. 🥲${NC}"
+                    continue
+                fi
+                PGPASSWORD="$token" PGSSLMODE=verify-full PGSSLROOTCERT="$RDS_CA_BUNDLE" \
+                    pgcli -h "$IAM_HOST" -p "$IAM_PORT" -U "$AWS_IAM_USER" -d "${IAM_DB:-postgres}"
+                unset token
+            else
+                pgcli "${!connection_var}"
+            fi
             ;;
         mongo)
             echo -e "${GR}Connecting to MongoDB ${choosen_env}...${NC}"
@@ -226,7 +281,22 @@ while true; do
             if [ -n "$TMUX" ]; then
                 tmux rename-window "${choosen_db}-${choosen_env}"
             fi
-            mycli "${!connection_var}"
+            iam_var="${connection_var}_iam"
+            if [ -n "${!iam_var:-}" ]; then
+                parse_iam_spec "${!iam_var}"
+                echo -e "${GR}Using IAM auth as ${AWS_IAM_USER} -> ${IAM_HOST}${NC}"
+                if ! token=$(rds_iam_token); then
+                    echo -e "${RD}Failed to get IAM token. 🥲${NC}"
+                    continue
+                fi
+                mysql_db_args=()
+                [ -n "$IAM_DB" ] && mysql_db_args=(-D "$IAM_DB")
+                MYSQL_PWD="$token" mycli -h "$IAM_HOST" -P "$IAM_PORT" -u "$AWS_IAM_USER" "${mysql_db_args[@]}" \
+                    --ssl-mode on --ssl-ca "$RDS_CA_BUNDLE" --ssl-verify-server-cert
+                unset token
+            else
+                mycli "${!connection_var}"
+            fi
             ;;
         sqlite)
             echo -e "${GR}Connecting to SQLite ${choosen_env}...${NC}"

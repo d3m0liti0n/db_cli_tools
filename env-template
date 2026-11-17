@@ -12,3 +12,9 @@ mysql_production="mysql://user:password@host:port/database"
 
 # Clients type
 CLICKHOUSE_CLI_TYPE=<clickhouse-cli / clickhouse-client>
+
+# AWS RDS IAM authentication
+AWS_IAM_USER="user@domain.example"
+RDS_CA_BUNDLE="$HOME/.aws/rds-combined.pem"
+postgres_integration_iam="host=rds.amazonaws.com port=port db=db profile=integration"
+mysql_integration_iam="host=rds.amazonaws.com port=port db=db profile=integration"
